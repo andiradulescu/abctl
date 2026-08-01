@@ -112,6 +112,15 @@ class MultiDiskAttributeTest(unittest.TestCase):
     ])
     set_boot_lun.assert_called_once_with(abctl.BOOT_LUN_B)
 
+  def test_mark_successful_clears_unbootable(self):
+    unrelated = (1 << 60) | abctl.ATTR_ACTIVE
+    attrs = unrelated | abctl.ATTR_UNBOOTABLE
+    updated = abctl.mark_successful("boot_b", attrs)
+
+    self.assertEqual(updated & abctl.ATTR_UNBOOTABLE, 0)
+    self.assertEqual(updated & abctl.ATTR_SUCCESS, abctl.ATTR_SUCCESS)
+    self.assertEqual(updated & unrelated, unrelated)
+
 
 if __name__ == "__main__":
   unittest.main()

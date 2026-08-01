@@ -149,6 +149,10 @@ def modify_slot_attributes(slot, modify_fn):
     modify_gpt_attributes(device, slot, modify_fn)
 
 
+def mark_successful(name, attrs):
+  return (attrs | ATTR_SUCCESS) & ~ATTR_UNBOOTABLE
+
+
 def swap_slot_guids(device):
   """Swap partition type GUIDs between _a and _b counterparts.
   Matches ABL SwitchPtnSlots() / SwapPtnGuid().
@@ -310,7 +314,7 @@ def main():
     print(get_current_slot())
 
   elif cmd == '--set_success':
-    modify_slot_attributes(get_current_slot(), lambda name, a: a | ATTR_SUCCESS)
+    modify_slot_attributes(get_current_slot(), mark_successful)
 
   elif cmd == '--set_active' and len(sys.argv) == 3:
     try:
