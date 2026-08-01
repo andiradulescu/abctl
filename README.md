@@ -60,10 +60,12 @@ When switching active slots, `abctl`:
 3. Sets the UFS boot LUN to point to the correct XBL (eXtensible Boot Loader) partition
 4. Updates both primary and backup GPT tables with recomputed CRCs
 
-**UFS boot LUN switching** supports three kernel interfaces (tried in order):
+**UFS boot LUN switching** supports two kernel interfaces (tried in order):
 1. Qualcomm `UFS_IOCTL_QUERY` on SG device (kernel 4.9 + Qualcomm patches)
-2. sysfs `boot_lun_en` attribute (mainline kernel 5.x+)
-3. UFS BSG ioctl (mainline kernel with `CONFIG_SCSI_UFS_BSG`)
+2. UFS BSG ioctl (mainline kernel with `CONFIG_SCSI_UFS_BSG`)
+
+The mainline `attributes/boot_lun_enabled` sysfs node is read-only and is used
+only to inspect the current value.
 
 **Block devices:**
 - `/dev/sda` — LUN 0 (system partitions)
