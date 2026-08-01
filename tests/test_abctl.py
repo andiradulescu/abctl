@@ -3,6 +3,8 @@ import importlib.machinery
 import importlib.util
 import pathlib
 import struct
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -49,6 +51,27 @@ class BootLunBsgTest(unittest.TestCase):
   def test_returns_false_without_ufs_bsg_device(self):
     with mock.patch.object(abctl.os, "listdir", return_value=["0:0:0:0"]):
       self.assertFalse(abctl._set_boot_lun_bsg(2))
+
+
+class SlotArgumentTest(unittest.TestCase):
+  def test_accepts_only_documented_slot_numbers(self):
+    self.assertEqual(abctl.parse_slot_arg("0"), "_a")
+    self.assertEqual(abctl.parse_slot_arg("1"), "_b")
+    for value in ("2", "a", "b", "", "-1"):
+      with self.subTest(value=value), self.assertRaises(ValueError):
+        abctl.parse_slot_arg(value)
+
+  def test_invalid_active_slot_exits_before_opening_devices(self):
+    result = subprocess.run(
+      [sys.executable, SCRIPT, "--set_active", "2"],
+      text=True,
+      capture_output=True,
+      check=False,
+    )
+    self.assertEqual(result.returncode, 1)
+    self.assertEqual(result.stdout, "")
+    self.assertIn("expected 0 or 1", result.stderr)
+    self.assertNotIn("Traceback", result.stderr)
 
 
 if __name__ == "__main__":

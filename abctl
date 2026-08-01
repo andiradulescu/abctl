@@ -39,6 +39,15 @@ AB_DEVICES = ['/dev/sda', '/dev/sde']
 BOOT_LUN_A = 1
 BOOT_LUN_B = 2
 
+
+def parse_slot_arg(value):
+  if value == '0':
+    return '_a'
+  if value == '1':
+    return '_b'
+  raise ValueError(f"Invalid slot {value!r}: expected 0 or 1")
+
+
 def get_current_slot():
   with open('/proc/cmdline') as f:
     for part in f.read().split():
@@ -298,8 +307,12 @@ def main():
   elif cmd == '--set_success':
     modify_gpt_attributes('/dev/sde', get_current_slot(), lambda name, a: a | ATTR_SUCCESS)
 
-  elif cmd == '--set_active' and len(sys.argv) > 2:
-    slot = '_a' if sys.argv[2] == '0' else '_b'
+  elif cmd == '--set_active' and len(sys.argv) == 3:
+    try:
+      slot = parse_slot_arg(sys.argv[2])
+    except ValueError as e:
+      print(e, file=sys.stderr)
+      sys.exit(1)
     other = '_b' if slot == '_a' else '_a'
 
     # Active slot: matches ABL SetActiveSlot() + MarkPtnActive()
@@ -333,8 +346,12 @@ def main():
     # Switch UFS boot LUN to match active slot (xbl_a=LUN1, xbl_b=LUN2)
     set_boot_lun(BOOT_LUN_A if slot == '_a' else BOOT_LUN_B)
 
-  elif cmd == '--set_unbootable' and len(sys.argv) > 2:
-    slot = '_a' if sys.argv[2] == '0' else '_b'
+  elif cmd == '--set_unbootable' and len(sys.argv) == 3:
+    try:
+      slot = parse_slot_arg(sys.argv[2])
+    except ValueError as e:
+      print(e, file=sys.stderr)
+      sys.exit(1)
     modify_gpt_attributes('/dev/sde', slot, lambda name, a: a | ATTR_UNBOOTABLE)
 
   else:
