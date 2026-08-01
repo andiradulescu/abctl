@@ -136,7 +136,8 @@ class MultiDiskAttributeTest(unittest.TestCase):
   def test_set_active_updates_both_slots_on_every_ab_disk(self):
     with mock.patch.object(abctl, "get_gpt_active_slot", return_value="_b"), \
          mock.patch.object(abctl, "modify_gpt_attributes") as modify, \
-         mock.patch.object(abctl, "set_boot_lun") as set_boot_lun:
+         mock.patch.object(abctl, "set_boot_lun") as set_boot_lun, \
+         mock.patch("sys.stdout") as stdout:
       self.run_main("--set_active", "1")
 
     self.assertEqual([call.args[:2] for call in modify.call_args_list], [
@@ -149,6 +150,19 @@ class MultiDiskAttributeTest(unittest.TestCase):
       mock.call(abctl.BOOT_LUN_B),
       mock.call(abctl.BOOT_LUN_B),
     ])
+    stdout.write.assert_any_call("setting xbl_b lun as boot lun")
+
+  def test_set_active_output_satisfies_openpilot_swap_predicate(self):
+    with mock.patch.object(abctl, "get_gpt_active_slot", return_value="_b"), \
+         mock.patch.object(abctl, "modify_gpt_attributes"), \
+         mock.patch.object(abctl, "set_boot_lun"), \
+         mock.patch.object(abctl, "swap_slot_guids"), \
+         mock.patch("sys.stdout") as stdout:
+      self.run_main("--set_active", "0")
+
+    output = "".join(call.args[0] for call in stdout.write.call_args_list)
+    self.assertNotIn("No such file or directory", output)
+    self.assertIn("lun as boot lun", output)
 
   def test_set_active_preflights_boot_lun_before_gpt_writes(self):
     with mock.patch.object(abctl, "get_gpt_active_slot", return_value="_b"), \
