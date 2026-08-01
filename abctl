@@ -84,6 +84,39 @@ def _write_gpt(f, header_lba, header, entries):
   f.write(header)
 
 
+def _read_gpt_pair(f):
+  primary = _read_gpt(f, 1)
+  primary_header, _, primary_count, primary_entry_size = primary
+  if primary_header is None:
+    raise RuntimeError("Invalid primary GPT")
+
+  backup_lba = struct.unpack('<Q', primary_header[32:40])[0]
+  backup = _read_gpt(f, backup_lba)
+  backup_header, _, backup_count, backup_entry_size = backup
+  if backup_header is None:
+    raise RuntimeError("Invalid backup GPT")
+  if (primary_count, primary_entry_size) != (backup_count, backup_entry_size):
+    raise RuntimeError("Primary and backup GPT geometry differ")
+
+  return primary, backup_lba, backup
+
+
+def _modify_entries(entries, num_entries, entry_size, slot, modify_fn):
+  modified = False
+  for i in range(num_entries):
+    off = i * entry_size
+    if entries[off:off+16] == b'\x00' * 16:
+      continue
+    name = entries[off+56:off+128].decode('utf-16-le').rstrip('\x00')
+    if name.endswith(slot):
+      attrs = struct.unpack('<Q', entries[off+48:off+56])[0]
+      new_attrs = modify_fn(name, attrs)
+      if new_attrs != attrs:
+        struct.pack_into('<Q', entries, off+48, new_attrs)
+        modified = True
+  return modified
+
+
 def get_gpt_active_slot():
   """Detect active slot from GPT boot partition flags.
   Unlike get_current_slot() (which reads /proc/cmdline and reflects the booted
@@ -114,32 +147,23 @@ def modify_gpt_attributes(device, slot, modify_fn):
   """Read GPT, modify matching partition attributes, write back to both GPTs.
   modify_fn(name, attrs) -> new_attrs"""
   with open(device, 'r+b') as f:
-    primary_header, entries, num_entries, entry_size = _read_gpt(f, 1)
-    if primary_header is None:
-      raise RuntimeError(f"Invalid GPT on {device}")
+    primary, backup_lba, backup = _read_gpt_pair(f)
+    primary_header, primary_entries, num_entries, entry_size = primary
+    backup_header, backup_entries, _, _ = backup
 
-    modified = False
-    for i in range(num_entries):
-      off = i * entry_size
-      if entries[off:off+16] == b'\x00' * 16:
-        continue
-      name = entries[off+56:off+128].decode('utf-16-le').rstrip('\x00')
-      if name.endswith(slot):
-        attrs = struct.unpack('<Q', entries[off+48:off+56])[0]
-        new_attrs = modify_fn(name, attrs)
-        if new_attrs != attrs:
-          struct.pack_into('<Q', entries, off+48, new_attrs)
-          modified = True
+    primary_modified = _modify_entries(
+      primary_entries, num_entries, entry_size, slot, modify_fn)
+    backup_modified = _modify_entries(
+      backup_entries, num_entries, entry_size, slot, modify_fn)
 
-    if not modified:
+    if not primary_modified and not backup_modified:
       return
 
     # Write backup first (safer if power fails), then primary
-    backup_lba = struct.unpack('<Q', primary_header[32:40])[0]
-    backup_header, _, _, _ = _read_gpt(f, backup_lba)
-    if backup_header is not None:
-      _write_gpt(f, backup_lba, backup_header, entries)
-    _write_gpt(f, 1, primary_header, entries)
+    if backup_modified:
+      _write_gpt(f, backup_lba, backup_header, backup_entries)
+    if primary_modified:
+      _write_gpt(f, 1, primary_header, primary_entries)
     f.flush()
     os.fsync(f.fileno())
 
@@ -153,42 +177,47 @@ def mark_successful(name, attrs):
   return (attrs | ATTR_SUCCESS) & ~ATTR_UNBOOTABLE
 
 
+def _swap_entry_guids(entries, num_entries, entry_size):
+  pairs = {}
+  for i in range(num_entries):
+    off = i * entry_size
+    if entries[off:off+16] == b'\x00' * 16:
+      continue
+    name = entries[off+56:off+128].decode('utf-16-le').rstrip('\x00')
+    if name.endswith('_a') or name.endswith('_b'):
+      pairs.setdefault(name[:-2], {})[name[-1]] = off
+
+  modified = False
+  for slots in pairs.values():
+    if 'a' in slots and 'b' in slots:
+      a, b = slots['a'], slots['b']
+      temp = bytes(entries[a:a+16])
+      entries[a:a+16] = entries[b:b+16]
+      entries[b:b+16] = temp
+      modified = True
+  return modified
+
+
 def swap_slot_guids(device):
   """Swap partition type GUIDs between _a and _b counterparts.
   Matches ABL SwitchPtnSlots() / SwapPtnGuid().
   https://git.codelinaro.org/clo/qcomlt/abl/-/blob/LE.UM.2.3.7/QcomModulePkg/Library/BootLib/PartitionTableUpdate.c#L452-510"""
   with open(device, 'r+b') as f:
-    primary_header, entries, num_entries, entry_size = _read_gpt(f, 1)
-    if primary_header is None:
-      return
+    primary, backup_lba, backup = _read_gpt_pair(f)
+    primary_header, primary_entries, num_entries, entry_size = primary
+    backup_header, backup_entries, _, _ = backup
 
-    pairs = {}
-    for i in range(num_entries):
-      off = i * entry_size
-      if entries[off:off+16] == b'\x00' * 16:
-        continue
-      name = entries[off+56:off+128].decode('utf-16-le').rstrip('\x00')
-      if name.endswith('_a') or name.endswith('_b'):
-        pairs.setdefault(name[:-2], {})[name[-1]] = off
+    primary_modified = _swap_entry_guids(primary_entries, num_entries, entry_size)
+    backup_modified = _swap_entry_guids(backup_entries, num_entries, entry_size)
 
-    modified = False
-    for slots in pairs.values():
-      if 'a' in slots and 'b' in slots:
-        a, b = slots['a'], slots['b']
-        temp = bytes(entries[a:a+16])
-        entries[a:a+16] = entries[b:b+16]
-        entries[b:b+16] = temp
-        modified = True
-
-    if not modified:
+    if not primary_modified and not backup_modified:
       return
 
     # Write backup first (safer if power fails), then primary
-    backup_lba = struct.unpack('<Q', primary_header[32:40])[0]
-    backup_header, _, _, _ = _read_gpt(f, backup_lba)
-    if backup_header is not None:
-      _write_gpt(f, backup_lba, backup_header, entries)
-    _write_gpt(f, 1, primary_header, entries)
+    if backup_modified:
+      _write_gpt(f, backup_lba, backup_header, backup_entries)
+    if primary_modified:
+      _write_gpt(f, 1, primary_header, primary_entries)
     f.flush()
     os.fsync(f.fileno())
 

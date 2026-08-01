@@ -5,6 +5,7 @@ import pathlib
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -14,6 +15,40 @@ LOADER = importlib.machinery.SourceFileLoader("abctl", str(SCRIPT))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 abctl = importlib.util.module_from_spec(SPEC)
 LOADER.exec_module(abctl)
+
+
+def make_entry(name, guid_byte, attrs=0):
+  entry = bytearray(128)
+  entry[0:16] = bytes([guid_byte]) * 16
+  struct.pack_into("<Q", entry, 48, attrs)
+  encoded_name = name.encode("utf-16-le")
+  entry[56:56 + len(encoded_name)] = encoded_name
+  return entry
+
+
+def make_header(current_lba, backup_lba, entries_lba, entry_count=2):
+  header = bytearray(abctl.SECTOR_SIZE)
+  header[0:8] = b"EFI PART"
+  struct.pack_into("<I", header, 12, 92)
+  struct.pack_into("<Q", header, 24, current_lba)
+  struct.pack_into("<Q", header, 32, backup_lba)
+  struct.pack_into("<Q", header, 72, entries_lba)
+  struct.pack_into("<I", header, 80, entry_count)
+  struct.pack_into("<I", header, 84, 128)
+  return header
+
+
+def make_gpt_image(path):
+  primary_entries = make_entry("boot_a", 0x11) + make_entry("boot_b", 0x22)
+  backup_entries = make_entry("boot_a", 0x33) + make_entry("boot_b", 0x44)
+  primary_header = make_header(1, 19, 2)
+  backup_header = make_header(19, 1, 18)
+
+  with open(path, "wb") as image:
+    image.truncate(20 * abctl.SECTOR_SIZE)
+  with open(path, "r+b") as image:
+    abctl._write_gpt(image, 1, primary_header, primary_entries)
+    abctl._write_gpt(image, 19, backup_header, backup_entries)
 
 
 class BootLunBsgTest(unittest.TestCase):
@@ -120,6 +155,40 @@ class MultiDiskAttributeTest(unittest.TestCase):
     self.assertEqual(updated & abctl.ATTR_UNBOOTABLE, 0)
     self.assertEqual(updated & abctl.ATTR_SUCCESS, abctl.ATTR_SUCCESS)
     self.assertEqual(updated & unrelated, unrelated)
+
+
+class GptMirrorTest(unittest.TestCase):
+  def read_pair(self, path):
+    with open(path, "rb") as image:
+      primary, _, backup = abctl._read_gpt_pair(image)
+    return primary[1], backup[1]
+
+  def test_attribute_updates_preserve_each_mirrors_unrelated_data(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = pathlib.Path(directory) / "disk.img"
+      make_gpt_image(path)
+
+      abctl.modify_gpt_attributes(
+        path, "_a", lambda name, attrs: attrs | abctl.ATTR_ACTIVE)
+      primary, backup = self.read_pair(path)
+
+    self.assertEqual(primary[128:144], bytes([0x22]) * 16)
+    self.assertEqual(backup[128:144], bytes([0x44]) * 16)
+    self.assertEqual(struct.unpack_from("<Q", primary, 48)[0], abctl.ATTR_ACTIVE)
+    self.assertEqual(struct.unpack_from("<Q", backup, 48)[0], abctl.ATTR_ACTIVE)
+
+  def test_guid_swaps_are_applied_to_each_mirror_independently(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = pathlib.Path(directory) / "disk.img"
+      make_gpt_image(path)
+
+      abctl.swap_slot_guids(path)
+      primary, backup = self.read_pair(path)
+
+    self.assertEqual(primary[0:16], bytes([0x22]) * 16)
+    self.assertEqual(primary[128:144], bytes([0x11]) * 16)
+    self.assertEqual(backup[0:16], bytes([0x44]) * 16)
+    self.assertEqual(backup[128:144], bytes([0x33]) * 16)
 
 
 if __name__ == "__main__":
