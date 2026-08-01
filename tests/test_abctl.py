@@ -145,7 +145,21 @@ class MultiDiskAttributeTest(unittest.TestCase):
       ("/dev/sda", "_a"),
       ("/dev/sde", "_a"),
     ])
-    set_boot_lun.assert_called_once_with(abctl.BOOT_LUN_B)
+    self.assertEqual(set_boot_lun.call_args_list, [
+      mock.call(abctl.BOOT_LUN_B),
+      mock.call(abctl.BOOT_LUN_B),
+    ])
+
+  def test_set_active_preflights_boot_lun_before_gpt_writes(self):
+    with mock.patch.object(abctl, "get_gpt_active_slot", return_value="_b"), \
+         mock.patch.object(abctl, "set_boot_lun", side_effect=RuntimeError("no BSG")), \
+         mock.patch.object(abctl, "swap_slot_guids") as swap, \
+         mock.patch.object(abctl, "modify_gpt_attributes") as modify:
+      with self.assertRaisesRegex(RuntimeError, "no BSG"):
+        self.run_main("--set_active", "0")
+
+    swap.assert_not_called()
+    modify.assert_not_called()
 
   def test_mark_successful_clears_unbootable(self):
     unrelated = (1 << 60) | abctl.ATTR_ACTIVE

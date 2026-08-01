@@ -48,6 +48,14 @@ def parse_slot_arg(value):
   raise ValueError(f"Invalid slot {value!r}: expected 0 or 1")
 
 
+def boot_lun_for_slot(slot):
+  if slot == '_a':
+    return BOOT_LUN_A
+  if slot == '_b':
+    return BOOT_LUN_B
+  raise ValueError(f"Invalid slot suffix {slot!r}")
+
+
 def get_current_slot():
   with open('/proc/cmdline') as f:
     for part in f.read().split():
@@ -374,7 +382,15 @@ def main():
     # Must read active slot from GPT, not /proc/cmdline — cmdline reflects the
     # booted slot which doesn't change until reboot.
     current = get_gpt_active_slot()
-    if current is not None and current != slot:
+    if current is None:
+      raise RuntimeError("Cannot set active slot: GPT has no active boot slot")
+
+    # Prove that a boot-LUN write works before mutating either GPT. Writing the
+    # current value is idempotent and prevents the known failure mode where
+    # GPT changes succeeded before an unavailable UFS interface was detected.
+    set_boot_lun(boot_lun_for_slot(current))
+
+    if current != slot:
       for dev in AB_DEVICES:
         swap_slot_guids(dev)
 
@@ -382,7 +398,7 @@ def main():
     modify_slot_attributes(other, deactivate)
 
     # Switch UFS boot LUN to match active slot (xbl_a=LUN1, xbl_b=LUN2)
-    set_boot_lun(BOOT_LUN_A if slot == '_a' else BOOT_LUN_B)
+    set_boot_lun(boot_lun_for_slot(slot))
 
   elif cmd == '--set_unbootable' and len(sys.argv) == 3:
     try:
