@@ -74,5 +74,44 @@ class SlotArgumentTest(unittest.TestCase):
     self.assertNotIn("Traceback", result.stderr)
 
 
+class MultiDiskAttributeTest(unittest.TestCase):
+  def run_main(self, *args):
+    with mock.patch.object(abctl.sys, "argv", [str(SCRIPT), *args]):
+      abctl.main()
+
+  def test_mark_successful_updates_every_ab_disk(self):
+    with mock.patch.object(abctl, "get_current_slot", return_value="_b"), \
+         mock.patch.object(abctl, "modify_gpt_attributes") as modify:
+      self.run_main("--set_success")
+
+    self.assertEqual([call.args[:2] for call in modify.call_args_list], [
+      ("/dev/sda", "_b"),
+      ("/dev/sde", "_b"),
+    ])
+
+  def test_mark_unbootable_updates_every_ab_disk(self):
+    with mock.patch.object(abctl, "modify_gpt_attributes") as modify:
+      self.run_main("--set_unbootable", "0")
+
+    self.assertEqual([call.args[:2] for call in modify.call_args_list], [
+      ("/dev/sda", "_a"),
+      ("/dev/sde", "_a"),
+    ])
+
+  def test_set_active_updates_both_slots_on_every_ab_disk(self):
+    with mock.patch.object(abctl, "get_gpt_active_slot", return_value="_b"), \
+         mock.patch.object(abctl, "modify_gpt_attributes") as modify, \
+         mock.patch.object(abctl, "set_boot_lun") as set_boot_lun:
+      self.run_main("--set_active", "1")
+
+    self.assertEqual([call.args[:2] for call in modify.call_args_list], [
+      ("/dev/sda", "_b"),
+      ("/dev/sde", "_b"),
+      ("/dev/sda", "_a"),
+      ("/dev/sde", "_a"),
+    ])
+    set_boot_lun.assert_called_once_with(abctl.BOOT_LUN_B)
+
+
 if __name__ == "__main__":
   unittest.main()

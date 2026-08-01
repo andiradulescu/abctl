@@ -144,6 +144,11 @@ def modify_gpt_attributes(device, slot, modify_fn):
     os.fsync(f.fileno())
 
 
+def modify_slot_attributes(slot, modify_fn):
+  for device in AB_DEVICES:
+    modify_gpt_attributes(device, slot, modify_fn)
+
+
 def swap_slot_guids(device):
   """Swap partition type GUIDs between _a and _b counterparts.
   Matches ABL SwitchPtnSlots() / SwapPtnGuid().
@@ -305,7 +310,7 @@ def main():
     print(get_current_slot())
 
   elif cmd == '--set_success':
-    modify_gpt_attributes('/dev/sde', get_current_slot(), lambda name, a: a | ATTR_SUCCESS)
+    modify_slot_attributes(get_current_slot(), lambda name, a: a | ATTR_SUCCESS)
 
   elif cmd == '--set_active' and len(sys.argv) == 3:
     try:
@@ -340,8 +345,8 @@ def main():
       for dev in AB_DEVICES:
         swap_slot_guids(dev)
 
-    modify_gpt_attributes('/dev/sde', slot, activate)
-    modify_gpt_attributes('/dev/sde', other, deactivate)
+    modify_slot_attributes(slot, activate)
+    modify_slot_attributes(other, deactivate)
 
     # Switch UFS boot LUN to match active slot (xbl_a=LUN1, xbl_b=LUN2)
     set_boot_lun(BOOT_LUN_A if slot == '_a' else BOOT_LUN_B)
@@ -352,7 +357,7 @@ def main():
     except ValueError as e:
       print(e, file=sys.stderr)
       sys.exit(1)
-    modify_gpt_attributes('/dev/sde', slot, lambda name, a: a | ATTR_UNBOOTABLE)
+    modify_slot_attributes(slot, lambda name, a: a | ATTR_UNBOOTABLE)
 
   else:
     print(f"Unknown: {cmd}", file=sys.stderr)
